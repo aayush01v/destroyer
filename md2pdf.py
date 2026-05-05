@@ -30,6 +30,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import hashlib
 from rich.console import Console
 from rich.panel import Panel
 from rich.status import Status
@@ -315,6 +316,7 @@ def build_latex_header(page_size_key: str, line_numbers: bool) -> str:
 \usepackage{{fancyhdr}}
 \usepackage{{mdframed}}
 \usepackage{{microtype}}
+\usepackage{{hyperref}}
 
 % Math
 \usepackage{{amsmath}}
@@ -346,6 +348,8 @@ def build_latex_header(page_size_key: str, line_numbers: bool) -> str:
 \definecolor{{qbar}}      {{HTML}}{{93C5FD}}   % blockquote left bar
 \definecolor{{qbg}}       {{HTML}}{{EFF6FF}}   % blockquote background
 \definecolor{{tblhead}}   {{HTML}}{{EFF6FF}}   % table header fill
+\definecolor{{mermaidbg}} {{HTML}}{{F8FAFC}}   % diagram code background
+\definecolor{{mermaidbd}} {{HTML}}{{CBD5E1}}   % diagram code border
 
 % ── KOMA heading colours ────────────────────────────────────
 \addtokomafont{{section}}{{\color{{accent}}\Large}}
@@ -411,6 +415,18 @@ def build_latex_header(page_size_key: str, line_numbers: bool) -> str:
 % ── Code blocks ─────────────────────────────────────────────
 \usepackage{{framed}}
 \definecolor{{shadecolor}}{{HTML}}{{F8F9FA}}
+\newenvironment{{mermaidblock}}{{%
+  \begin{{mdframed}}[
+      linecolor=mermaidbd,
+      linewidth=1pt,
+      backgroundcolor=mermaidbg,
+      roundcorner=4pt,
+      innertopmargin=6pt,
+      innerbottommargin=6pt,
+      innerleftmargin=8pt,
+      innerrightmargin=8pt
+  ]\ttfamily\small
+}}{{\end{{mdframed}}}}
 
 % ── Blockquotes ─────────────────────────────────────────────
 \renewenvironment{{quote}}{{%
@@ -448,6 +464,54 @@ def _pick_pdf_engine() -> str:
     )
 
 
+# ── Diagram pre-processing (Mermaid/flowchart) ──────────────────────────────
+
+def _prepare_diagram_blocks(markdown: str) -> str:
+    """
+    Convert Mermaid/flowchart fenced blocks into rendered images when possible.
+    Fallback to a styled verbatim LaTeX block when no renderer is available.
+    """
+    mmdc = shutil.which("mmdc")
+    assets_dir = os.path.join(os.getcwd(), ".md2pdf_diagrams")
+    if mmdc:
+        os.makedirs(assets_dir, exist_ok=True)
+
+    def _replace(match: re.Match) -> str:
+        block = match.group(0)
+        code = match.group(1).strip()
+        if not code:
+            return block
+
+        if mmdc:
+            digest = hashlib.sha1(code.encode("utf-8")).hexdigest()[:12]
+            src_path = os.path.join(assets_dir, f"{digest}.mmd")
+            out_path = os.path.join(assets_dir, f"{digest}.svg")
+            with open(src_path, "w", encoding="utf-8") as fh:
+                fh.write(code + "\n")
+            result = subprocess.run(
+                [mmdc, "-i", src_path, "-o", out_path, "-b", "transparent"],
+                capture_output=True,
+                check=False,
+            )
+            if result.returncode == 0 and os.path.exists(out_path):
+                rel = os.path.relpath(out_path, os.getcwd())
+                return f"\n![Flowchart]({rel})\n"
+
+        escaped = code.replace("\\", r"\textbackslash{}")
+        return (
+            "```{=latex}\n\\begin{mermaidblock}\n"
+            + escaped
+            + "\n\\end{mermaidblock}\n```\n"
+        )
+
+    return re.sub(
+        r"```(?:mermaid|flowchart)\n(.*?)```",
+        _replace,
+        markdown,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+
+
 # ── Core converter ───────────────────────────────────────────────────────────
 
 def convert_to_pdf(
@@ -457,6 +521,8 @@ def convert_to_pdf(
     output_filename: str = "output.pdf",
     page_size: str = "a4",
     line_numbers: bool = False,
+    include_toc: bool = True,
+    toc_depth: int = 3,
 ) -> bool:
     """Convert Markdown (file path or raw string) to a polished PDF."""
 
@@ -478,6 +544,7 @@ def convert_to_pdf(
             raw = input_data
 
         fixed_md = preprocess_markdown(raw)
+        fixed_md = _prepare_diagram_blocks(fixed_md)
 
         # Pandoc markdown dialect
         md_format = (
@@ -504,25 +571,18 @@ def convert_to_pdf(
         ):
             # ── Step A: pandoc → intermediate LaTeX ──────────────────────────
             extra_args_latex = [
-                f"--pdf-engine={engine}",
                 "-V", "documentclass=scrartcl",
                 "--include-in-header", style_file,
-                "--syntax-highlighting=idiomatic",
                 "--standalone",
-                "-V", "colorlinks=true",
-                "-V", "linkcolor=accent",
-                "-V", "urlcolor=accent",
             ]
+            if include_toc:
+                extra_args_latex.extend(["--toc", "--toc-depth", str(toc_depth)])
 
             latex_src = pypandoc.convert_text(
                 fixed_md,
                 "latex",
                 format=md_format,
-                extra_args=[
-                    "-V", "documentclass=scrartcl",
-                    "--include-in-header", style_file,
-                    "--standalone",
-                ],
+                extra_args=extra_args_latex,
             )
 
             # ── Step B: post-process LaTeX ───────────────────────────────────
@@ -663,6 +723,17 @@ def main():
         action="store_true",
         help="Watch the input file and rebuild on every save (Ctrl-C to stop)",
     )
+    parser.add_argument(
+        "--no-toc",
+        action="store_true",
+        help="Disable table of contents generation.",
+    )
+    parser.add_argument(
+        "--toc-depth",
+        type=int,
+        default=3,
+        help="Depth of headings in table of contents (default: 3).",
+    )
     args = parser.parse_args()
 
     # ── Resolve output name
@@ -685,6 +756,8 @@ def main():
                 output_filename=out_name,
                 page_size=args.page_size,
                 line_numbers=args.line_numbers,
+                include_toc=not args.no_toc,
+                toc_depth=max(1, min(6, args.toc_depth)),
             )
         return
 
@@ -699,6 +772,8 @@ def main():
         output_filename=out_name,
         page_size=args.page_size,
         line_numbers=args.line_numbers,
+        include_toc=not args.no_toc,
+        toc_depth=max(1, min(6, args.toc_depth)),
     )
 
     # ── Watch mode
