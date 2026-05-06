@@ -523,10 +523,12 @@ def convert_to_pdf(
     line_numbers: bool = False,
     include_toc: bool = True,
     toc_depth: int = 3,
+    render_diagrams: bool = True,
+    output_dir: str | None = None,
 ) -> bool:
     """Convert Markdown (file path or raw string) to a polished PDF."""
 
-    downloads_folder = os.path.expanduser("~/storage/downloads/")
+    downloads_folder = output_dir or os.path.expanduser("~/storage/downloads/")
     os.makedirs(downloads_folder, exist_ok=True)
     output_pdf = os.path.join(downloads_folder, output_filename)
 
@@ -544,7 +546,8 @@ def convert_to_pdf(
             raw = input_data
 
         fixed_md = preprocess_markdown(raw)
-        fixed_md = _prepare_diagram_blocks(fixed_md)
+        if render_diagrams:
+            fixed_md = _prepare_diagram_blocks(fixed_md)
 
         # Pandoc markdown dialect
         md_format = (
@@ -621,13 +624,19 @@ def convert_to_pdf(
 
                 pdf_path = os.path.join(tmpdir, "document.pdf")
                 if not os.path.exists(pdf_path):
-                    err = result.stderr.decode(errors="replace")
+                    err = (
+                        result.stderr.decode(errors="replace")
+                        or result.stdout.decode(errors="replace")
+                    )
+                    useful = [
+                        l for l in err.splitlines()
+                        if l.startswith("!") or "Error" in l or "error" in l
+                    ]
+                    if not useful:
+                        useful = err.splitlines()[-20:]
                     raise RuntimeError(
                         f"{engine} failed.\n"
-                        + "\n".join(
-                            l for l in err.splitlines()
-                            if l.startswith("!") or "Error" in l
-                        )[:800]
+                        + "\n".join(useful)[:1800]
                     )
                 import shutil as _sh
                 _sh.copy2(pdf_path, output_pdf)
@@ -638,6 +647,7 @@ def convert_to_pdf(
                 f"[white]PDF saved to:\n[cyan]{output_pdf}[/]\n"
                 f"[dim]Page size: {page_size.upper()}  |  Engine: {engine}"
                 + ("  |  Line numbers: on" if line_numbers else "")
+                + ("  |  TOC: on" if include_toc else "  |  TOC: off")
                 + "[/]",
                 title="md2pdf",
                 border_style="green",
@@ -734,6 +744,16 @@ def main():
         default=3,
         help="Depth of headings in table of contents (default: 3).",
     )
+    parser.add_argument(
+        "--outdir",
+        default=os.path.expanduser("~/storage/downloads/"),
+        help="Output directory for the final PDF (default: ~/storage/downloads/).",
+    )
+    parser.add_argument(
+        "--no-diagrams",
+        action="store_true",
+        help="Disable Mermaid/flowchart rendering and keep diagram blocks as plain text.",
+    )
     args = parser.parse_args()
 
     # ── Resolve output name
@@ -758,6 +778,8 @@ def main():
                 line_numbers=args.line_numbers,
                 include_toc=not args.no_toc,
                 toc_depth=max(1, min(6, args.toc_depth)),
+                render_diagrams=not args.no_diagrams,
+                output_dir=args.outdir,
             )
         return
 
@@ -774,6 +796,8 @@ def main():
         line_numbers=args.line_numbers,
         include_toc=not args.no_toc,
         toc_depth=max(1, min(6, args.toc_depth)),
+        render_diagrams=not args.no_diagrams,
+        output_dir=args.outdir,
     )
 
     # ── Watch mode
