@@ -105,6 +105,15 @@ def preprocess_markdown(text: str) -> str:
     # Separate adjacent $$ blocks that got merged (consecutive [ ] blocks)
     text = re.sub(r'\$\$\s*\$\$', '$$\n\n$$', text)
 
+    # Normalize manual matrix/aligned line breaks inside display-math blocks:
+    # many notes use a single backslash at EOL, but LaTeX needs \\ for new rows.
+    def _fix_display_breaks(m: re.Match) -> str:
+        body = m.group(1)
+        body = re.sub(r'(?<!\\)\\\n', r'\\\\\n', body)
+        return f'$$\n{body}\n$$'
+
+    text = re.sub(r'\$\$\n(.*?)\n\$\$', _fix_display_breaks, text, flags=re.DOTALL)
+
     # ── 2. Asterisk subscripts in math expressions ───────────────────────────
     # Patterns like  \text{VaR}*{95}  or  z*{0.95}  →  \text{VaR}_{95}
     # Must run BEFORE the inline-math parenthesis pass so $...$ blocks are clean.
@@ -558,6 +567,8 @@ def convert_to_pdf(
             "-simple_tables"
             "+pipe_tables"
             "+tex_math_dollars"
+            "+tex_math_single_backslash"
+            "+raw_tex"
             "+lists_without_preceding_blankline"
             "+blank_before_header"
         )
