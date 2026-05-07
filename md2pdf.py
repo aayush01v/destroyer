@@ -237,7 +237,8 @@ def preprocess_markdown(text: str) -> str:
         parts = re.split(r'(\$\$[\s\S]*?\$\$|\$[^$\n]+?\$)', src)
         return ''.join(fn(p) if i % 2 == 0 else p for i, p in enumerate(parts))
 
-    paren_pat = re.compile(r'\(([^()\n]{1,120})\)')
+    # Do not match across table pipes `|` to avoid breaking markdown tables
+    paren_pat = re.compile(r'\(([^()|\n]{1,120})\)')
     text = apply_outside_math(lambda p: paren_pat.sub(maybe_math, p), text)
 
     # ── 4. Tables: blank-line insertion ──────────────────────────────────────
@@ -541,7 +542,7 @@ def _prepare_diagram_blocks(markdown: str) -> str:
     )
 
 
-# ── Core converter ───────────────────────────────────────────────────────────
+# ── Core converter ─────────────────────────────────────────────────────────
 
 def convert_to_pdf(
     input_data: str,
@@ -726,7 +727,7 @@ class MarkdownWatcher(FileSystemEventHandler):
             self.last_run = time.time()
 
 
-# ── CLI ──────────────────────────────────────────────────────────────────────
+# ── CLI ────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
