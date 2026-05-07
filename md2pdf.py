@@ -20,7 +20,6 @@ Usage:
 Page size presets: a4 (default), letter, legal, a3, a5, b5, executive
 """
 
-import pypandoc
 import os
 import sys
 import io
@@ -31,6 +30,27 @@ import shutil
 import subprocess
 import tempfile
 import hashlib
+import importlib.util
+
+
+def _require_python_packages() -> None:
+    """Fail fast with a clear install hint when optional deps are missing."""
+    missing = []
+    for module in ("pypandoc", "rich", "watchdog"):
+        if importlib.util.find_spec(module) is None:
+            missing.append(module)
+    if missing:
+        pkg_list = " ".join(missing)
+        raise SystemExit(
+            "Missing Python package(s): "
+            + ", ".join(missing)
+            + f"\nInstall with: python3 -m pip install {pkg_list}"
+        )
+
+
+_require_python_packages()
+
+import pypandoc
 from rich.console import Console
 from rich.panel import Panel
 from rich.status import Status
